@@ -5,7 +5,8 @@ Modes:
   (no arguments)                      PreToolUse hook; reads the hook JSON on stdin.
   scan    --repo DIR [--ref REF ...]  print unpushed commits, review key and findings.
   diff    --repo DIR [--ref REF ...]  print every added line of the unpushed commits.
-  audit   --repo DIR [--limit N]      read-only audit of the whole repo: every tracked file at HEAD
+  audit   --repo DIR [--limit N] [--since DATE]
+                                      read-only audit of the whole repo: every tracked file at HEAD
                                       plus every commit in history (pushed or not), same rules.
   approve --repo DIR [--ref REF ...] --key KEY
                                       record the security agent's approval; refused
@@ -53,7 +54,21 @@ SKIPPED_PATHS = re.compile(
     r"Cargo\.lock|poetry\.lock|go\.sum|composer\.lock|bun\.lockb?|Gemfile\.lock)$"
 )
 
+# Files that are never read at all, filtered by git itself so their (often huge) lines never reach the regexes:
+# lockfiles, SVG (often base64 images on one line), source maps and minified bundles.
+EXCLUDED_PATHSPECS = [
+    ":(exclude,glob)**/*.svg", ":(exclude,glob)**/*.map", ":(exclude,glob)**/*.min.js", ":(exclude,glob)**/*.min.css",
+    ":(exclude,glob)**/package-lock.json", ":(exclude,glob)**/yarn.lock", ":(exclude,glob)**/pnpm-lock.yaml",
+    ":(exclude,glob)**/*.lock", ":(exclude,glob)**/go.sum", ":(exclude,glob)**/bun.lockb",
+]
+# Lines longer than this are checked only with the fixed-prefix token rules, not the broad
+# "name = value" rules, which are slow on long lines and noisy on generated content.
+LONG_LINE_LENGTH = 4000
+# Folders whose values are UI text or test ids, not credentials: the broad rules skip them.
+BROAD_RULE_SKIPPED_PATHS = re.compile(r"(?i)(^|/)(test-?ids?|locales?|i18n|translations?|lang)/")
+
 # (rule name, pattern, index of the group holding the value or 0 for the whole match, placeholder check)
+# Rules with the placeholder check on are the "broad" rules.
 CONTENT_RULES = [
     ("private-key", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY( BLOCK)?-----"), 0, False),
     ("aws-access-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), 0, False),
@@ -78,7 +93,7 @@ CONTENT_RULES = [
     (
         "generic-secret-assignment",
         re.compile(
-            r"(?i)[\w.\-]*(?:password|passwd|pwd|secret|api[_\-]?key|apikey|access[_\-]?token|auth[_\-]?token|"
+            r"(?i)(?:password|passwd|pwd|secret|api[_\-]?key|apikey|access[_\-]?token|auth[_\-]?token|"
             r"refresh[_\-]?token|client[_\-]?secret|private[_\-]?key|signing[_\-]?key)[\w.\-]*[\"']?\s*[:=]\s*[\"']([^\"'\s]{8,})[\"']"
         ),
         1,
@@ -150,7 +165,7 @@ def iterate_added_lines(repository, references, git_arguments=None, initial_comm
     if git_arguments is None:
         git_arguments = [
             "log", "-p", "--no-merges", "--no-color", "--no-ext-diff", "--unified=0", "--diff-filter=d",
-            "--format=%x00COMMIT %H", *references, "--not", "--remotes",
+            "--format=%x00COMMIT %H", *references, "--not", "--remotes", "--", ".", *EXCLUDED_PATHSPECS,
         ]
     process = subprocess.Popen(
         ["git", "-C", str(repository), "-c", "core.quotePath=false", *git_arguments],
@@ -207,6 +222,9 @@ VARIABLE_REFERENCE = re.compile(
 
 def looks_like_placeholder(value):
     if VARIABLE_REFERENCE.match(value.strip()):
+        return True
+    # UI text such as "Please enter your password" or Thai labels: spaces or non-ASCII letters.
+    if any(character.isspace() for character in value) or any(ord(character) > 127 for character in value):
         return True
     lowered = value.lower()
     if any(hint in lowered for hint in PLACEHOLDER_HINTS):
@@ -320,7 +338,10 @@ def scan_lines(repository, added_lines, keep_raw=False):
                 seen.add(key)
                 add({"rule": rule_name, "commit": commit, "path": path, "line": line_number, "value": mask(match.group(0))},
                     match.group(0).lower())
+        broad_rules_apply = len(text) <= LONG_LINE_LENGTH and not BROAD_RULE_SKIPPED_PATHS.search(path)
         for rule_name, pattern, group_index, check_placeholder in CONTENT_RULES:
+            if check_placeholder and not broad_rules_apply:
+                continue
             for match in pattern.finditer(text):
                 value = match.group(group_index) or match.group(0)
                 if check_placeholder and looks_like_placeholder(value):
@@ -632,20 +653,25 @@ def command_audit(arguments):
         return 0
     head_lines = iterate_added_lines(
         repository, None, initial_commit=head,
-        git_arguments=["diff", "--no-color", "--no-ext-diff", "--unified=0", empty_tree(repository), head])
+        git_arguments=["diff", "--no-color", "--no-ext-diff", "--unified=0", empty_tree(repository), head,
+                       "--", ".", *EXCLUDED_PATHSPECS])
     head_findings = scan_lines(repository, head_lines, keep_raw=True)
     history_lines = iterate_added_lines(
         repository, None,
         git_arguments=["log", "-p", "--all", "--reverse", "--no-merges", "--no-color", "--no-ext-diff",
-                       "--unified=0", "--diff-filter=d", "--format=%x00COMMIT %H"])
+                       "--unified=0", "--diff-filter=d", "--format=%x00COMMIT %H",
+                       *([f"--since={arguments.since}"] if arguments.since else []),
+                       "--", ".", *EXCLUDED_PATHSPECS])
     history_findings = scan_lines(repository, history_lines, keep_raw=True)
     pushed_commits = set(run_git(repository, "rev-list", "--remotes", check=False).stdout.split())
     in_head = {finding["raw_key"] for finding in head_findings}
     history_only = [finding for finding in history_findings if finding["raw_key"] not in in_head]
-    commit_count = run_git(repository, "rev-list", "--all", "--count", check=False).stdout.strip() or "?"
+    count_arguments = ["rev-list", "--all", "--count"] + ([f"--since={arguments.since}"] if arguments.since else [])
+    since_label = f", since {arguments.since}" if arguments.since else ""
+    commit_count = run_git(repository, *count_arguments, check=False).stdout.strip() or "?"
     remotes = ", ".join(sorted(remote_urls(repository))) or "(none)"
 
-    print(f"repo: {repository}\nHEAD: {head[:12]}\ncommits in history (all refs): {commit_count}\nremotes: {remotes}")
+    print(f"repo: {repository}\nHEAD: {head[:12]}\ncommits in history (all refs{since_label}): {commit_count}\nremotes: {remotes}")
     print(f"\n== A. In the current files (HEAD): {len(head_findings)} finding(s)")
     for finding in head_findings[:arguments.limit]:
         print(format_finding(finding))
@@ -657,7 +683,8 @@ def command_audit(arguments):
         print(format_finding(finding) + f"  [{where}]")
     if len(history_only) > arguments.limit:
         print(f"  ... and {len(history_only) - arguments.limit} more")
-    print("\nNote: values are masked. Merge commits are not read, and the audit never records an approval.")
+    print("\nNote: values are masked. Merge commits, lockfiles, SVG, source maps and minified files are not read,"
+          " and the audit never records an approval.")
     return 1 if head_findings or history_only else 0
 
 
@@ -693,6 +720,7 @@ def main():
         subparser.add_argument("--repo", required=True)
         if mode == "audit":
             subparser.add_argument("--limit", type=int, default=200)
+            subparser.add_argument("--since", help="only read history after this date, a date (YYYY-MM-DD) or text such as '6 months ago'")
         else:
             subparser.add_argument("--ref", action="append")
         if mode == "approve":

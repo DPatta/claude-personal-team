@@ -104,7 +104,7 @@ The audit uses the same rules as the push guard, secrets and personal informatio
 - **A.** every tracked file at HEAD;
 - **B.** every commit in history on all branches, for findings that were removed from the files but are still in old commits, each marked `pushed` or `local only`.
 
-It is read-only and never records a push approval. The agent then reads the files for what the regex misses and recommends a fix. A secret that was pushed must be rotated; removing it from history is not enough. A large repo with long history can take a few minutes. `personal-security-audit` uses the same command for its secrets step.
+It is read-only and never records a push approval. The agent then reads the files for what the regex misses and recommends a fix. A secret that was pushed must be rotated; removing it from history is not enough. Lockfiles, SVG, source maps and minified files are skipped, so a repo with about 2,000 commits takes well under a minute; add `--since '1 year ago'` to limit how far back it reads. `personal-security-audit` uses the same command for its secrets step.
 
 ## How the team learns (memory)
 

@@ -20,7 +20,7 @@ If you were called directly without it, use `--repo <current repo> --ref HEAD` a
 
 Used when the dispatch says `MODE: audit` with `--repo <path>`. There is no push and no key: you never run `approve` in this mode.
 
-1. Run `audit --repo R`. It can take several minutes on a large repo with long history, so give the Bash call a long timeout (up to 600000 ms). It prints two sections: **A** findings in the current files at HEAD, and **B** findings only in history (removed from the files but still in old commits), each marked `[pushed]` or `[local only]`.
+1. Run `audit --repo R` with a long Bash timeout (600000 ms). A repo with about 2,000 commits takes well under a minute. If it still times out, run it again with `--since <date>` (for example `--since '1 year ago'`), and say in the report which period you covered. Lockfiles, SVG, source maps and minified files are not read; broad `name = value` rules skip lines over 4,000 characters and the `testIds`, `locales` and `i18n` folders. It prints two sections: **A** findings in the current files at HEAD, and **B** findings only in history (removed from the files but still in old commits), each marked `[pushed]` or `[local only]`.
 2. Read the current files for what regex misses, the same list as step 3 of the push procedure below. Focus on config, CI, scripts, docs, agent rules and fixtures. For history, read the commits that section B points to with `rtk proxy git show <commit> -- <path>` (or plain `git` without rtk), never the whole history.
 3. Classify every finding as REAL, LIKELY or FALSE POSITIVE, as in the push procedure.
 4. Verdict: **CLEAN** (nothing REAL or LIKELY), **FINDINGS** (anything REAL or LIKELY) or **NEEDS USER** (only judgment calls, such as names the owner may want public).
