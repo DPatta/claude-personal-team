@@ -98,7 +98,7 @@ else
   pass "added @Preferences.md"
 fi
 
-say "== 5. settings.json: commit guard and secret-scan push guard"
+say "== 5. settings.json: commit guard, secret-scan push guard, auto-compact at 40%"
 if [ -n "$python_command" ]; then
   # shellcheck disable=SC2086
   $python_command - "$claude_directory/settings.json" <<'PYTHON'
@@ -126,6 +126,13 @@ for marker, command, timeout in wanted:
     else:
         entries.append({"matcher": "Bash|PowerShell", "hooks": [{"type": "command", "command": command, "timeout": timeout}]})
     print(f"  PASS  {markers[0]} registered in settings.json")
+# Compact earlier than the default so long sessions keep room to work. Never overwrite a value the user set.
+environment = settings.setdefault("env", {})
+if "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" in environment:
+    print(f"  PASS  CLAUDE_AUTOCOMPACT_PCT_OVERRIDE already set to {environment['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']}, left as is")
+else:
+    environment["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "40"
+    print("  PASS  CLAUDE_AUTOCOMPACT_PCT_OVERRIDE set to 40")
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(settings, handle, indent=2, ensure_ascii=False)
     handle.write("\n")
@@ -134,6 +141,7 @@ else
   fail "skipped (needs Python). Add these to ~/.claude/settings.json → hooks.PreToolUse by hand:"
   say '        {"matcher":"Bash|PowerShell","hooks":[{"type":"command","command":"bash \"$HOME/.claude/hooks/commit-ask-guard.sh\"","timeout":10}]}'
   say '        {"matcher":"Bash|PowerShell","hooks":[{"type":"command","command":"bash \"$HOME/.claude/hooks/secret-scan/pre-push-guard.sh\"","timeout":120}]}'
+  say '      and under "env": "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40"'
 fi
 
 say "== 6. Self-test (runs the hooks exactly as Claude Code will)"

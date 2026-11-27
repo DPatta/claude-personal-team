@@ -39,7 +39,7 @@ cd ~/claude-personal-team
 bash install.sh
 ```
 
-The installer backs up anything it replaces to `~/.claude/backups/personal-team-<timestamp>/`, copies the files, adds `@Preferences.md` to `~/.claude/CLAUDE.md`, registers the commit guard in `~/.claude/settings.json`, then runs a self-test of every hook. If rtk is installed it runs `rtk init -g`; if GitNexus is installed it registers the GitNexus MCP server at user scope. Re-running it is safe.
+The installer backs up anything it replaces to `~/.claude/backups/personal-team-<timestamp>/`, copies the files, adds `@Preferences.md` to `~/.claude/CLAUDE.md`, registers the commit guard and the secret-scan push guard in `~/.claude/settings.json`, sets `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `40` there (auto-compact at 40% of the context window; an existing value is kept), then runs a self-test of every hook. If rtk is installed it runs `rtk init -g`; if GitNexus is installed it registers the GitNexus MCP server at user scope. Re-running it is safe.
 
 Then restart Claude Code. Optionally install `project-docs-kit` (see [project-docs-kit (optional)](#project-docs-kit-optional)).
 
