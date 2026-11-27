@@ -1,0 +1,16 @@
+# Private terms for the secret-scan push guard.
+# Copy to ~/.claude/secret-scan-private-terms.txt (install.sh does this once) and fill it in.
+# That file stays outside every repo; never commit it.
+#
+# One regular expression per line, matched case-insensitively against added lines and file names
+# in every repo, public or private. A match blocks the push until you decide.
+# Add ";; allow-remote=<text>,<text>" to allow a term in repos whose every remote URL contains one
+# of those texts, for example your employer's name inside your employer's own repos.
+#
+# Built in, no need to list: your home path (/Users/<you>, /home/<you>, C:\Users\<you>) and the
+# global git user.email (skipped when it is a noreply address, so list your real email here).
+#
+# Examples (remove the leading "# " to use them):
+# ExampleCorp ;; allow-remote=github.com/examplecorp/,github.com:examplecorp/
+# \bmy-side-project\b ;; allow-remote=my-side-project
+# you@example\.com
