@@ -11,7 +11,7 @@ payload="$repository/payload"
 touch "$source_directory/.personal-team-source"
 
 agents=(personal-advisor personal-architect personal-designer personal-developer personal-qa personal-reviewer personal-tester security-secret-scanner)
-skills=(personal-dev-team personal-review-method personal-security-audit correct interrogate brainstorming ui-ux-pro-max)
+skills=(personal-dev-team personal-review-method personal-security-audit correct interrogate docs-hygiene brainstorming ui-ux-pro-max)
 hooks=(agent-memory-only.sh agent-memory-only.py run-python.sh commit-ask-guard.sh commit-ask-guard.py gitnexus-reindex.sh)
 binaries=(worktree-fingerprint.sh)
 

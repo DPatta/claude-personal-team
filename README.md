@@ -9,7 +9,7 @@ A portable copy of my Claude Code **personal dev team**, so it works the same on
 | Folder | Contents |
 |---|---|
 | `agents/` | `personal-advisor`, `-architect`, `-designer`, `-developer`, `-qa`, `-reviewer`, `-tester`, plus `security-secret-scanner` (reviews outgoing commits when the push guard blocks) |
-| `skills/` | Team skills `personal-dev-team`, `personal-review-method`, `personal-security-audit`, `correct` (moves a repeated agent mistake into a hook or check), `interrogate` (adversarial review where only proven findings survive), plus the role skills the agents load: `brainstorming`, `ui-ux-pro-max` |
+| `skills/` | Team skills `personal-dev-team`, `personal-review-method`, `personal-security-audit`, `correct` (moves a repeated agent mistake into a hook or check), `interrogate` (adversarial review where only proven findings survive), `docs-hygiene` (audits and condenses a project's docs, then adds a layout test so they stay small), plus the role skills the agents load: `brainstorming`, `ui-ux-pro-max` |
 | `hooks/` | `agent-memory-only` (keeps read-only agents out of project files), `commit-ask-guard` (asks before any commit, shows the message and files), `run-python.sh` (finds Python 3 on any OS), `gitnexus-reindex.sh` (reindexes a repo without leaving a `.gitignore` change), `secret-scan/` (blocks `git push`, `gh repo create --push`, `gh pr create` and repo-writing `gh api` calls until the outgoing commits are scanned for secrets and personal information and approved by `security-secret-scanner`; see [Personal information check](#personal-information-check)) |
 | `bin/` | `worktree-fingerprint.sh` (proves a read-only agent changed nothing) |
 | `Preferences.md` | Global rules the agents refer to (`Preferences.md > Git`, `> Safety`) |
