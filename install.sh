@@ -191,6 +191,16 @@ case "$allowed_output" in
   *'deterministic findings: 0'*) pass "a private term is allowed in its allow-remote repo" ;;
   *) fail "allow-remote did not allow the term (output: ${allowed_output:-empty})" ;;
 esac
+audit_repository="$(mktemp -d)"
+(cd "$audit_repository" && git init -q && printf 'token=%s%s\n' 'AKIA' 'ABCDEFGHIJKLMNOP' > config.txt && git add config.txt \
+  && git -c user.name=test -c user.email=test@example.invalid commit -q -m key \
+  && echo 'token=$AWS_KEY' > config.txt && git -c user.name=test -c user.email=test@example.invalid commit -q -am removed)
+audit_output="$(bash "$HOME/.claude/hooks/run-python.sh" "$HOME/.claude/hooks/secret-scan/pre_push_guard.py" audit --repo "$audit_repository" 2>&1)"
+rm -rf "$audit_repository"
+case "$audit_output" in
+  *'In the current files (HEAD): 0'*'Only in history'*'aws-access-key-id'*'local only'*) pass "audit finds a key removed from the files but left in history" ;;
+  *) fail "audit missed a key left in history (output: ${audit_output:-empty})" ;;
+esac
 test_repository="$(mktemp -d)"
 before="$(cd "$test_repository" && git init -q && echo one > a.txt && bash "$claude_directory/bin/worktree-fingerprint.sh" 2>/dev/null)"
 after="$(cd "$test_repository" && echo two > b.txt && bash "$claude_directory/bin/worktree-fingerprint.sh" 2>/dev/null)"

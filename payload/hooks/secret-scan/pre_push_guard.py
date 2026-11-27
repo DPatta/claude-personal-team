@@ -5,6 +5,8 @@ Modes:
   (no arguments)                      PreToolUse hook; reads the hook JSON on stdin.
   scan    --repo DIR [--ref REF ...]  print unpushed commits, review key and findings.
   diff    --repo DIR [--ref REF ...]  print every added line of the unpushed commits.
+  audit   --repo DIR [--limit N]      read-only audit of the whole repo: every tracked file at HEAD
+                                      plus every commit in history (pushed or not), same rules.
   approve --repo DIR [--ref REF ...] --key KEY
                                       record the security agent's approval; refused
                                       when the deterministic scan still has findings
@@ -139,20 +141,25 @@ def review_key(repository, commits):
     return digest.hexdigest()[:20]
 
 
-def iterate_added_lines(repository, references):
-    """Yield (commit, path, line number, text) for every added line, plus (commit, path, None, None) per touched file."""
+def iterate_added_lines(repository, references, git_arguments=None, initial_commit=None):
+    """Yield (commit, path, line number, text) for every added line, plus (commit, path, None, None) per touched file.
+
+    By default reads the unpushed commits of `references`. `git_arguments` replaces the git command
+    (for the audit); `initial_commit` labels lines when the output has no commit markers (a plain diff).
+    """
+    if git_arguments is None:
+        git_arguments = [
+            "log", "-p", "--no-merges", "--no-color", "--no-ext-diff", "--unified=0", "--diff-filter=d",
+            "--format=%x00COMMIT %H", *references, "--not", "--remotes",
+        ]
     process = subprocess.Popen(
-        [
-            "git", "-C", str(repository), "-c", "core.quotePath=false", "log", "-p", "--no-merges",
-            "--no-color", "--no-ext-diff", "--unified=0", "--diff-filter=d", "--format=%x00COMMIT %H",
-            *references, "--not", "--remotes",
-        ],
+        ["git", "-C", str(repository), "-c", "core.quotePath=false", *git_arguments],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
         errors="replace",
     )
-    commit = None
+    commit = initial_commit
     path = None
     line_number = 0
     for raw_line in process.stdout:
@@ -272,23 +279,36 @@ def personal_rules(repository):
 
 
 def scan_findings(repository, references):
+    return scan_lines(repository, iterate_added_lines(repository, references))
+
+
+def scan_lines(repository, added_lines, keep_raw=False):
+    """Apply every rule to (commit, path, line number, text) tuples. With keep_raw, each finding also
+    carries "raw_key", a digest of the raw value, so the audit can match history to HEAD without
+    keeping the value itself."""
     findings = []
     seen = set()
     private_rules = personal_rules(repository)
-    for commit, path, line_number, text in iterate_added_lines(repository, references):
+
+    def add(finding, raw_value):
+        if keep_raw:
+            finding["raw_key"] = hashlib.sha256(f"{finding['rule']}\0{finding['path']}\0{raw_value}".encode()).hexdigest()
+        findings.append(finding)
+
+    for commit, path, line_number, text in added_lines:
         if line_number is None:
             rule_name = sensitive_file_rule(path)
             key = (rule_name, path)
             if rule_name and key not in seen:
                 seen.add(key)
-                findings.append({"rule": rule_name, "commit": commit, "path": path, "line": None, "value": "(whole file)"})
+                add({"rule": rule_name, "commit": commit, "path": path, "line": None, "value": "(whole file)"}, "(whole file)")
             for rule_name, pattern in private_rules:
                 match = pattern.search(path)
                 key = (rule_name, path, "path")
                 if match and key not in seen:
                     seen.add(key)
-                    findings.append({"rule": rule_name, "commit": commit, "path": path, "line": None,
-                                     "value": f"in file name: {mask(match.group(0))}"})
+                    add({"rule": rule_name, "commit": commit, "path": path, "line": None,
+                         "value": f"in file name: {mask(match.group(0))}"}, "path:" + match.group(0).lower())
             continue
         if SKIPPED_PATHS.search(path) or INLINE_ALLOW_MARKER in text:
             continue
@@ -298,7 +318,8 @@ def scan_findings(repository, references):
                 if key in seen:
                     continue
                 seen.add(key)
-                findings.append({"rule": rule_name, "commit": commit, "path": path, "line": line_number, "value": mask(match.group(0))})
+                add({"rule": rule_name, "commit": commit, "path": path, "line": line_number, "value": mask(match.group(0))},
+                    match.group(0).lower())
         for rule_name, pattern, group_index, check_placeholder in CONTENT_RULES:
             for match in pattern.finditer(text):
                 value = match.group(group_index) or match.group(0)
@@ -308,7 +329,7 @@ def scan_findings(repository, references):
                 if key in seen:
                     continue
                 seen.add(key)
-                findings.append({"rule": rule_name, "commit": commit, "path": path, "line": line_number, "value": mask(value)})
+                add({"rule": rule_name, "commit": commit, "path": path, "line": line_number, "value": mask(value)}, value)
     return findings
 
 
@@ -593,6 +614,53 @@ def command_diff(arguments):
     return 0
 
 
+def empty_tree(repository):
+    completed = subprocess.run(["git", "-C", str(repository), "mktree"], input="", capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise RuntimeError(f"git mktree failed: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def command_audit(arguments):
+    """Read-only audit: every tracked file at HEAD, then every commit in history (all refs, oldest first)."""
+    repository = repository_root(os.path.expanduser(arguments.repo))
+    if repository is None:
+        sys.exit(f"not a git repository: {arguments.repo}")
+    head = run_git(repository, "rev-parse", "--verify", "--quiet", "HEAD", check=False).stdout.strip()
+    if not head:
+        print(f"repo: {repository}\nno commits yet; nothing to audit")
+        return 0
+    head_lines = iterate_added_lines(
+        repository, None, initial_commit=head,
+        git_arguments=["diff", "--no-color", "--no-ext-diff", "--unified=0", empty_tree(repository), head])
+    head_findings = scan_lines(repository, head_lines, keep_raw=True)
+    history_lines = iterate_added_lines(
+        repository, None,
+        git_arguments=["log", "-p", "--all", "--reverse", "--no-merges", "--no-color", "--no-ext-diff",
+                       "--unified=0", "--diff-filter=d", "--format=%x00COMMIT %H"])
+    history_findings = scan_lines(repository, history_lines, keep_raw=True)
+    pushed_commits = set(run_git(repository, "rev-list", "--remotes", check=False).stdout.split())
+    in_head = {finding["raw_key"] for finding in head_findings}
+    history_only = [finding for finding in history_findings if finding["raw_key"] not in in_head]
+    commit_count = run_git(repository, "rev-list", "--all", "--count", check=False).stdout.strip() or "?"
+    remotes = ", ".join(sorted(remote_urls(repository))) or "(none)"
+
+    print(f"repo: {repository}\nHEAD: {head[:12]}\ncommits in history (all refs): {commit_count}\nremotes: {remotes}")
+    print(f"\n== A. In the current files (HEAD): {len(head_findings)} finding(s)")
+    for finding in head_findings[:arguments.limit]:
+        print(format_finding(finding))
+    if len(head_findings) > arguments.limit:
+        print(f"  ... and {len(head_findings) - arguments.limit} more")
+    print(f"\n== B. Only in history (removed from the current files, still in old commits): {len(history_only)} finding(s)")
+    for finding in history_only[:arguments.limit]:
+        where = "pushed" if finding["commit"] in pushed_commits else "local only"
+        print(format_finding(finding) + f"  [{where}]")
+    if len(history_only) > arguments.limit:
+        print(f"  ... and {len(history_only) - arguments.limit} more")
+    print("\nNote: values are masked. Merge commits are not read, and the audit never records an approval.")
+    return 1 if head_findings or history_only else 0
+
+
 def command_approve(arguments):
     repository, references = resolve_repository(arguments)
     commits = unpushed_commits(repository, references)
@@ -620,14 +688,18 @@ def main():
         return hook_main()
     parser = argparse.ArgumentParser(description="Secret scan for unpushed commits")
     subparsers = parser.add_subparsers(dest="mode", required=True)
-    for mode in ("scan", "diff", "approve"):
+    for mode in ("scan", "diff", "approve", "audit"):
         subparser = subparsers.add_parser(mode)
         subparser.add_argument("--repo", required=True)
-        subparser.add_argument("--ref", action="append")
+        if mode == "audit":
+            subparser.add_argument("--limit", type=int, default=200)
+        else:
+            subparser.add_argument("--ref", action="append")
         if mode == "approve":
             subparser.add_argument("--key", required=True)
     arguments = parser.parse_args()
-    return {"scan": command_scan, "diff": command_diff, "approve": command_approve}[arguments.mode](arguments)
+    modes = {"scan": command_scan, "diff": command_diff, "approve": command_approve, "audit": command_audit}
+    return modes[arguments.mode](arguments)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,21 @@ you@example\.com
 
 The check runs only on pushes Claude runs (it is a Claude Code hook); a `git push` you type in a terminal is not checked. A match blocks the push the same way a secret does. `security-secret-scanner` also reads the diff for what a list cannot catch, such as other people's names and dated stories about past incidents. To push anyway, check the finding and use `SECRET_SCAN_ACK=1` as for any other false positive.
 
+## Secret audit (whole repo)
+
+The push guard only sees commits that are about to be pushed. Anything already pushed, or committed before the guard was installed, is never checked. For that, ask Claude to audit the repo ("audit secret", "check this repo for leaked secrets"). It dispatches `security-secret-scanner` with `MODE: audit`, which runs:
+
+```bash
+bash ~/.claude/hooks/run-python.sh ~/.claude/hooks/secret-scan/pre_push_guard.py audit --repo <path>
+```
+
+The audit uses the same rules as the push guard, secrets and personal information included, over two parts:
+
+- **A.** every tracked file at HEAD;
+- **B.** every commit in history on all branches, for findings that were removed from the files but are still in old commits, each marked `pushed` or `local only`.
+
+It is read-only and never records a push approval. The agent then reads the files for what the regex misses and recommends a fix. A secret that was pushed must be rotated; removing it from history is not enough. A large repo with long history can take a few minutes. `personal-security-audit` uses the same command for its secrets step.
+
 ## How the team learns (memory)
 
 Each `personal-*` agent has `memory: user` in its frontmatter, so it keeps its own folder at `~/.claude/agent-memory/<agent>/`:
